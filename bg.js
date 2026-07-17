@@ -4,75 +4,24 @@ const FLASH_INTERVAL_MS = 1000;
 
 chrome.tabs.onUpdated.addListener( ( id, changeInfo, changedTab ) =>
 {
-	var alertIcon = chrome.extension.getURL( "/img/alarm.png" );
-
-	// Don't ever apply this extension to internal settings or chrome:// tabs
-	if ( !changedTab || changedTab.url.startsWith( 'chrome://' ) )
+	// Only inject into pages covered by the extension's host permissions.
+	if ( !isSupportedPage( changedTab?.url ) )
 	{
 		return;
 	}
 
-	chrome.tabs.getCurrent( async ( info ) =>
+	if ( changedTab.active || !changeInfo.title )
 	{
-		// Don't ever apply this extension to active tabs, or to tabs whose title has not changed
-		if ( changedTab.active || !changeInfo.title )
-		{
-			return;
-		}
+		return;
+	}
 
-		var settings = await getSettings();
-
-		if ( settings.alternateIcon && settings.alternateIcon.trim() )
-		{
-			alertIcon = settings.alternateIcon;
-		}
-
-		if ( ! ( settings.applyTo == 'allTabs'
-			|| ( settings.applyTo == 'pinnedOnly'   &&  changedTab.pinned  )
-			|| ( settings.applyTo == 'unpinnedOnly' && !changedTab.pinned ) ) )
-		{
-			return;
-		}
-
-		// Check if this tab's URL matches any of the URLs given in the list
-		var urlIsAMatch = false;
-		settings.listEntries.trim()
-			.split( /(\s*\n\s*)+/ )
-			.filter( el => el )
-			.some( line =>
-			{
-				if ( changedTab.url.startsWith( line ) )
-				{
-					urlIsAMatch = true;
-					return true;
-				}
-			} );
-
-		if ( !settings.listEntries.trim() // Ignore the value of settings.listType when the list is empty
-			|| ( settings.listType == 'enable'  &&  urlIsAMatch )
-			|| ( settings.listType == 'disable' && !urlIsAMatch ) )
-		{
-
-			chrome.tabs.executeScript( id, {
-				code: `document.querySelectorAll( 'link[rel*="icon"]' ).forEach( el =>
-					{
-						if ( el.oldHref )
-						{
-							return;
-						}
-						el.oldHref = el.href;
-						el.href = "${alertIcon}"
-						if ("${settings.flashIcon}" != 'disable') {
-							let showingOld = false;
-							el.interval = setInterval( () =>
-							{
-								el.href = showingOld ? "${alertIcon}" : el.oldHref;
-								showingOld = !showingOld;
-							}, ${FLASH_INTERVAL_MS} );
-						}
-					} );`
-				} );
-		}
+	console.debug( '[Blue Dot Replacement] Title changed in background tab', {
+		tabId: id,
+		url: changedTab.url,
+	} );
+	applyAlert( id, changedTab ).catch( error =>
+	{
+		console.error( '[Blue Dot Replacement] Could not replace the favicon.', error );
 	} );
 } );
 
@@ -86,25 +35,17 @@ chrome.tabs.onActivated.addListener( activeInfo =>
 				return;
 			}
 
-			if ( !tab || tab.url.startsWith( 'chrome://' ) )
+			if ( !isSupportedPage( tab?.url ) )
 			{
 				return;
 			}
 
-			chrome.tabs.executeScript( activeInfo.tabId, {
-				code: `document.querySelectorAll( 'link[rel*="icon"]' )
-						.forEach( el =>
-						{
-							if ( el.oldHref )
-							{
-								el.href = el.oldHref;
-								delete el.oldHref;
-								if ( el.interval ) {
-									clearInterval( el.interval );
-								}
-							}
-						} );`
-			} );
+			chrome.scripting.executeScript( {
+				target: { tabId: activeInfo.tabId },
+				func: restoreIcons,
+			} ).catch( error => console.error(
+				'[Blue Dot Replacement] Could not restore the favicon.', error
+			) );
 		} );
 	}
 	handler();
@@ -122,4 +63,80 @@ function getSettings()
 		alternateIcon : '',
 		flashIcon     : 'enable',
 	}, resolve ) );
+}
+
+async function applyAlert( tabId, tab )
+{
+	const settings = await getSettings();
+	const alertIcon = settings.alternateIcon?.trim() || chrome.runtime.getURL( 'img/alarm.png' );
+
+	if ( ! ( settings.applyTo === 'allTabs'
+		|| ( settings.applyTo === 'pinnedOnly' && tab.pinned )
+		|| ( settings.applyTo === 'unpinnedOnly' && !tab.pinned ) ) )
+	{
+		return;
+	}
+
+	const entries = settings.listEntries.trim().split( /\s*\n\s*/ ).filter( Boolean );
+	const urlIsAMatch = entries.some( entry => tab.url.startsWith( entry ) );
+	if ( entries.length && ! ( ( settings.listType === 'enable' && urlIsAMatch )
+		|| ( settings.listType === 'disable' && !urlIsAMatch ) ) )
+	{
+		return;
+	}
+
+	await chrome.scripting.executeScript( {
+		target: { tabId },
+		func: replaceIcons,
+		args: [ alertIcon, settings.flashIcon !== 'disable', FLASH_INTERVAL_MS ],
+	} );
+	console.debug( '[Blue Dot Replacement] Favicon replacement injected.', { tabId } );
+}
+
+function replaceIcons( alertIcon, shouldFlash, intervalMs )
+{
+	document.querySelectorAll( 'link[rel*="icon"]' ).forEach( icon =>
+	{
+		if ( icon.dataset.blueDotReplacementOriginalHref )
+		{
+			return;
+		}
+
+		icon.dataset.blueDotReplacementOriginalHref = icon.href;
+		icon.href = alertIcon;
+		if ( shouldFlash )
+		{
+			let showingOriginal = false;
+			icon.blueDotReplacementInterval = setInterval( () =>
+			{
+				icon.href = showingOriginal ? icon.dataset.blueDotReplacementOriginalHref : alertIcon;
+				showingOriginal = !showingOriginal;
+			}, intervalMs );
+		}
+	} );
+}
+
+function restoreIcons()
+{
+	document.querySelectorAll( 'link[rel*="icon"]' ).forEach( icon =>
+	{
+		const originalHref = icon.dataset.blueDotReplacementOriginalHref;
+		if ( !originalHref )
+		{
+			return;
+		}
+
+		icon.href = originalHref;
+		delete icon.dataset.blueDotReplacementOriginalHref;
+		if ( icon.blueDotReplacementInterval )
+		{
+			clearInterval( icon.blueDotReplacementInterval );
+			delete icon.blueDotReplacementInterval;
+		}
+	} );
+}
+
+function isSupportedPage( url )
+{
+	return /^https?:\/\//.test( url || '' );
 }
