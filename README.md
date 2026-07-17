@@ -1,6 +1,8 @@
 # Blue Dot Replacement
 ## Chrome Extension
 
+This is a translation to Manifest V3 of Will Groenendyk's original Blue Dot Replacement extension.  Here is his original README verbatim (I have not yet added my extension to the Chrome web store):
+
 Get it from the Chrome web store: https://chrome.google.com/webstore/detail/opjidajjikdcpbpbbcmadmignnimecco/publish-accepted?authuser=1&hl=en-US
 
 Inspired by me missing the blue dots that used to show up near the icon of tabs whose titles had
