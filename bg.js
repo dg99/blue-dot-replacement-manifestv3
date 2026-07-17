@@ -15,13 +15,9 @@ chrome.tabs.onUpdated.addListener( ( id, changeInfo, changedTab ) =>
 		return;
 	}
 
-	console.debug( '[Blue Dot Replacement] Title changed in background tab', {
-		tabId: id,
-		url: changedTab.url,
-	} );
-	applyAlert( id, changedTab ).catch( error =>
+	applyAlert( id, changedTab ).catch( () =>
 	{
-		console.error( '[Blue Dot Replacement] Could not replace the favicon.', error );
+		// The tab may have navigated or closed before the injection completed.
 	} );
 } );
 
@@ -43,9 +39,7 @@ chrome.tabs.onActivated.addListener( activeInfo =>
 			chrome.scripting.executeScript( {
 				target: { tabId: activeInfo.tabId },
 				func: restoreIcons,
-			} ).catch( error => console.error(
-				'[Blue Dot Replacement] Could not restore the favicon.', error
-			) );
+			} ).catch( () => {} );
 		} );
 	}
 	handler();
@@ -90,7 +84,6 @@ async function applyAlert( tabId, tab )
 		func: replaceIcons,
 		args: [ alertIcon, settings.flashIcon !== 'disable', FLASH_INTERVAL_MS ],
 	} );
-	console.debug( '[Blue Dot Replacement] Favicon replacement injected.', { tabId } );
 }
 
 function replaceIcons( alertIcon, shouldFlash, intervalMs )
